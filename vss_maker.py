@@ -192,7 +192,7 @@ if __name__ == '__main__':
         # reproducing vss
         reproduced_audio = vss(hrir, audio).T
 
-    elif mode == 'binaural':
+    elif mode == 'stereo':
         # reproducing binaural mix
         reproduced_audio = stereo_mix(audio).T
 
