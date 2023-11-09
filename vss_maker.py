@@ -1,12 +1,15 @@
 """
-This script takes in mono audio file "Mister Magic" by Grover Washington, Jr.
-and reproduce a 7.1.4 system surround sound effect in two methods.
+This script takes in 7.1 audio file: Glass Lounge by TeknoAXE
+and reproduce a 7.1 system surround sound effect into a stereo mix in two methods:
+virtual surround sound and naive downmix.
 
 Author: Sivan Ding (sivan.d@nyu.edu)
 
 The 7.1.4 layout configuration is adopted from https://www.dolby.com/about/support/guide/speaker-setup-guides/7.1.4-overhead-speaker-setup-guide/
+The audio file and its metadata obtained from https://amvizo.com/features/
 
 """
+import librosa
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -93,13 +96,19 @@ def stereo_mix(audio):
     """
     left = audio[:, 0]
     right = audio[:, 1]
+    center = audio[:, 2]
+    side_left = audio[:, 3]
+    side_right = audio[:, 4]
+    back_left = audio[:, 5]
+    back_right = audio[:, 6]
+
     # downmix 7.1 to 5.1
-    ls = left + minus_db(left, 1.2) + minus_db(left, 6.2)
-    rs = right + minus_db(right, 6.2) + minus_db(right, 1.2)
+    ls = side_left + minus_db(back_left, 1.2) + minus_db(back_right, 6.2)
+    rs = side_right + minus_db(back_left, 6.2) + minus_db(back_right, 1.2)
 
     # downmix 5.1 to stereo
-    l = left + minus_db(left, 3) - minus_db(ls, 1.2) - minus_db(rs, 6.2)
-    r = right + minus_db(left, 3) - minus_db(ls, 6.2) - minus_db(rs, 1.2)
+    l = left + minus_db(center, 3) - minus_db(ls, 1.2) - minus_db(rs, 6.2)
+    r = right + minus_db(center, 3) - minus_db(ls, 6.2) - minus_db(rs, 1.2)
 
     stereo = np.vstack((l, r))
     stereo = stereo * np.amax(audio) / np.amax(stereo)
@@ -141,9 +150,9 @@ def test(source_coordinates, data_ir):
 
 def get_ir(source_coordinates, data_ir):
     # all measurements are done at distance 2.06m with (azimuth, elevation, radius)
-    location = ['ls', 'rs', 'cs', 'sub', 'lss', 'rss', 'lrss', 'rrss', 'ltfos', 'rtfo', 'ltros', 'rtros']
-    azimuth = [30, 330, 0, 20, 90, 270, 150, 210, 45, 315, 135, 225]
-    elevation = [0, 0, 0, -30, 0, 0, 0, 0, 45, 45, 45, 45]
+    location = ['ls', 'rs', 'cs',  'lss', 'rss', 'lrss', 'rrss']
+    azimuth = [30, 330, 0, 90, 270, 150, 210]
+    elevation = [0, 0, 0, 0, 0, 0, 0]
     # Left and right speakers ( 30, 0) (330, 0)
     # Center speaker (0, 0)
     # Subwoofer (20,  -30)
@@ -154,9 +163,13 @@ def get_ir(source_coordinates, data_ir):
     hrir = {}
     for i, loc in enumerate(location):
         index = source_coordinates.find_nearest_k(
-            azimuth[i], elevation[i], 2.06, k=1, domain='sph', convention='top_elev', unit='deg')[0]
+            azimuth[i], elevation[i], 2.06, k=1, domain='sph', convention='top_elev', unit='deg')[0] # hardcoded 2.06 m radius
         print(loc, index, source_coordinates.cartesian[index])
         hrir[loc] = data_ir[index].time.T
+
+    # create an empty array to get rid of LFE
+
+
     return hrir
 
 
@@ -175,9 +188,15 @@ def get_music():
 
 if __name__ == '__main__':
     ###### prepare multi-channel audio
-    audio, sr = sf.read('Mister Magic.flac')
+    audio, fs = sf.read('TeknoAXE - Glass Lounge (16b_8ch_44100Hz).flac')
+    print(audio.shape, fs)
+    sr = 44100
     time_len = 2 * 60  # truncate all instrument to 2 min
+    # resample audio to 44.1kHz
+    audio = librosa.resample(audio, orig_sr=fs, target_sr=sr, axis=0)
     audio = audio[:time_len * sr, :]
+    audio = audio[..., :7]# get rid of LFE
+    print(audio.shape, sr)
 
     ###### prepare two channel HRTF at different locations (azimuth, elevation) of dolby 7.1.4 layout:
     data_ir, source_coordinates, receiver_coordinates = pf.io.read_sofa(
@@ -185,8 +204,8 @@ if __name__ == '__main__':
     hrir = get_ir(source_coordinates, data_ir)
 
     ###### choose generating mode
-    modes = ['test', 'vss', 'binaural', 'vss_music']
-    mode = modes[2]
+    modes = ['test', 'vss', 'stereo', 'vss_music']
+    mode = modes[1]
 
     if mode == 'vss':
         # reproducing vss
