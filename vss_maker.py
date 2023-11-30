@@ -7,6 +7,7 @@ Author: Sivan Ding (sivan.d@nyu.edu)
 
 The 7.1.4 layout configuration is adopted from https://www.dolby.com/about/support/guide/speaker-setup-guides/7.1.4-overhead-speaker-setup-guide/
 The audio file and its metadata obtained from https://amvizo.com/features/
+HRIR from the Listen database https://sofacoustics.org/data/database/listen%20(dtf)/
 
 """
 import librosa
@@ -188,7 +189,7 @@ def get_music():
 
 if __name__ == '__main__':
     ###### prepare multi-channel audio
-    audio, fs = sf.read('TeknoAXE - Glass Lounge (16b_8ch_44100Hz).flac')
+    audio, fs = sf.read('audio/TeknoAXE - Glass Lounge (16b_8ch_44100Hz).flac')
     print(audio.shape, fs)
     sr = 44100
     time_len = 2 * 60  # truncate all instrument to 2 min
@@ -200,7 +201,7 @@ if __name__ == '__main__':
 
     ###### prepare two channel HRTF at different locations (azimuth, elevation) of dolby 7.1.4 layout:
     data_ir, source_coordinates, receiver_coordinates = pf.io.read_sofa(
-        'IRC_1003_C_44100.sofa')
+        'hrtf/IRC_1003_C_44100.sofa')
     hrir = get_ir(source_coordinates, data_ir)
 
     ###### choose generating mode
