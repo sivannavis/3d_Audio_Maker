@@ -4,6 +4,7 @@ This script perform speaker reproduction of binaural audio using crosstalk cance
 The implementation follows:
 Choueiri, Edgar Y. "Optimal crosstalk cancellation for binaural audio with two loudspeakers." Princeton University 28 (2008).
 Roginska, Agnieszka, and Paul Geluso, eds. Immersive sound: the art and science of binaural and multi-channel audio. Taylor & Francis, 2017. Chapter 5.
+
 Sivan Ding
 sivan.d@nyu.edu
 """
@@ -29,11 +30,11 @@ class CrosstalkCancel:
         self.counter = 0
 
         # configuration for preprocessing
-        self.window = 256
-        self.stride = 256
+        self.window = 128
+        self.stride = 128
 
     def fft(self, signal):
-        return librosa.stft(signal, n_fft=self.window, hop_length=self.stride)
+        return np.fft.fft(signal)
 
     def xtc_filter(self, mono_signal, contra_hrtf, ipsi_hrtf, output):
         """
@@ -49,49 +50,51 @@ class CrosstalkCancel:
         self.counter += 1
 
         # create recursion base condition and normal condition
-        cancelled = self.freq_delay(1 / mono_signal, delay)
+        cancelled = self.freq_delay(mono_signal, delay)
         cancelled *= attenuation
         if self.counter % 2:
-            cancelled *= contra_hrtf / ipsi_hrtf
+            cancelled *= contra_hrtf * freq_invert(ipsi_hrtf)
             output[1] += cancelled
         else:
-            cancelled = ipsi_hrtf / contra_hrtf
+            cancelled *= ipsi_hrtf * freq_invert(contra_hrtf)
             output[0] += cancelled
 
-        if amp_to_db(np.amax(np.abs(cancelled))) >= -60 or self.counter < 100:
+        if amp_to_db(np.amax(np.abs(cancelled)) / self.max) >= -60 or self.counter < 100:
             cancelled, _ = self.xtc_filter(cancelled, contra_hrtf, ipsi_hrtf, output)
 
         return cancelled, output
 
     def xtc_process(self, hrir):
         sig_fft = self.fft(self.sig)
-        hrtf = self.fft(hrir)  # 4 * length: l2l, l2r, r2l, r2r
         # pad hrtf to be same length as audio signal
-        hrtf = np.pad(hrtf, ((0, 0), (0, len(self.sig) - hrtf.shape[1])), 'constant')
+        hrir = np.pad(hrir, ((0, 0), (0, self.sig.shape[1] - hrir.shape[1])), 'constant')
+        hrtf = self.fft(hrir)  # 4 * length: l2l, l2r, r2l, r2r
 
         # core function of cancellation
         _, xtc_left = self.xtc_filter(self.sig[0], hrtf[2], hrtf[0], np.zeros_like(self.sig, dtype=complex))
         _, xtc_right = self.xtc_filter(self.sig[1], hrtf[1], hrtf[3], np.zeros_like(self.sig, dtype=complex))
 
         # do convolution for ipsilateral side
-        sig_hrtf = np.zeros_like(self.sig)
-        sig_hrtf[0] = sig_fft[0] * (1 / hrtf[0])
-        sig_hrtf[1] = sig_fft[0] * (1 / hrtf[3])
+        sig_hrtf = np.zeros_like(sig_fft)
+        sig_hrtf[0] = sig_fft[0] * hrtf[0]
+        sig_hrtf[1] = sig_fft[1] * hrtf[3]
 
         # do inverse fft for all of them
-        sig_ifft = np.real(librosa.istft(sig_hrtf))
-        xtc_left_ifft = np.real(librosa.istft(xtc_left))
-        xtc_right_ifft = np.real(librosa.istft(xtc_right))
+        sig_ifft = np.real(np.fft.ifft(sig_hrtf))
+        xtc_left_ifft = np.real(np.fft.ifft(xtc_left))
+        xtc_right_ifft = np.real(np.fft.ifft(xtc_right))
 
         # sum left and right signals
-        left = sum(sig_ifft[0], xtc_left_ifft[0], xtc_right_ifft[1])  # sum up everything that goes to left
-        right = sum(sig_ifft[1], xtc_left_ifft[1], xtc_right_ifft[0])
+        left = sig_ifft[0] + xtc_left_ifft[0] + xtc_right_ifft[1]  # sum up everything that goes to left
+        right = sig_ifft[1] + xtc_left_ifft[1] + xtc_right_ifft[0]
 
         # normallization by channel
         left = left / max(left)
         right = right / max(right)
 
         stereo = np.vstack((left, right))
+
+        print(self.counter)
 
         return stereo
 
@@ -106,8 +109,9 @@ class CrosstalkCancel:
         return delay
 
 
-def freq_invert():
-    pass
+def freq_invert(x):
+
+    return np.true_divide(1, x)
 
 
 def amp_to_db(x):
@@ -130,8 +134,8 @@ def get_ir(source_coordinates, data_ir):
             azimuth[i], elevation[i], 2.06, k=1, domain='sph', convention='top_elev', unit='deg')[
             0]  # hardcoded 2.06 m radius
         print(loc, index, source_coordinates.cartesian[index])
-        hrir.append(data_ir[index].time.T[0])
-        hrir.append(data_ir[index].time.T[1])
+        hrir.append(data_ir[index].time[0])
+        hrir.append(data_ir[index].time[1])
 
     return np.array(hrir)
 
@@ -152,23 +156,28 @@ def get_geo(speaker_dist, spaker_to_head, ear_dist):
 
 
 if __name__ == '__main__':
-    file = './audio/skateboard.mp3'
-    sig, sr = sf.read(file)
-
-    # personal configurations in meters
-    speaker_dist = 0.2
-    speaker_to_head = 0.3
-    ear_dist = 0.15
-    geometry = get_geo(speaker_dist, speaker_to_head, ear_dist)
-
     # prepare hrir
     data_ir, source_coordinates, receiver_coordinates = pf.io.read_sofa(
         'hrtf/IRC_1003_C_44100.sofa')
     hrir = get_ir(source_coordinates, data_ir)
+    hrir_sr = 44100
+
+    # prepare stereo audio
+    file = './audio/guzheng.wav'
+    sig, sr = sf.read(file)
+    sig = librosa.resample(sig, orig_sr=sr, target_sr=hrir_sr, axis=0)
+    sig = sig.T
+
+    # personal configurations in meters
+    speaker_dist = 0.5
+    speaker_to_head = 0.5
+    ear_dist = 0.15
+    geometry = get_geo(speaker_dist, speaker_to_head, ear_dist)
+
 
     # core function
     target = CrosstalkCancel(sig, sr, geometry)
     cancelled_sig = target.xtc_process(hrir)
 
     # write out
-    sf.write('./audio/xtc.wav', cancelled_sig, sr)
+    sf.write('xtc.wav', cancelled_sig.T, hrir_sr)
